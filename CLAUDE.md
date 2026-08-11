@@ -12,9 +12,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **`docs/auth-api.md`** — the frontend's published contract for `/auth/*`, and the source of truth for it:
   where it disagrees with a rule, it wins, because the client already ships against it. What that costs us
   is in [auth-contract](.claude/rules/auth-contract.md).
+- **`docs/PoC Scope Login, Authorization & Homepage.pdf`** — the acceptance criteria the work is measured
+  against. Its text cannot be extracted here: the file uses subset fonts whose `ToUnicode` maps cover only
+  ligatures, and there is no `pdftotext`, `pypdf`, `mutool` or `qpdf` in the image or on the host. Ask for
+  the page rather than inferring what a criterion says.
 - **This file** — stack, commands, layout, and the cross-cutting facts that belong to no single app.
 
 Don't duplicate a rule or a skill here. Domain detail belongs in the rule for its app.
+
+**Scope comes from the story; the contract supplies shapes.** The acceptance criteria decide what gets built.
+`docs/auth-api.md` is authoritative for what a payload and an error body *look like* — fields, codes,
+statuses, cookie flags — and not for the infrastructure it also asks for. Its rate-limit lines are
+deliberately unimplemented; so is everything past the forgot-password entry point, which answers 204 and
+sends nothing, because no reset-confirm endpoint exists in the contract for a link to land on. Building
+either is a decision to be asked for, not inferred from the contract.
 
 <!-- The Celery skill and the async-tasks rule ship with the skill set but do not apply here: this project
      has no broker and no worker. Do not introduce Celery without a decision to add one. -->
@@ -33,10 +44,16 @@ drf-yasg our other backends use: drf-yasg emits OpenAPI 2.0, which has no cookie
 project authenticates with a session cookie. Where the [drf-endpoints](.claude/skills/drf-endpoints/SKILL.md)
 skill says drf-yasg, it means drf-spectacular here — `@swagger_auto_schema` is `@extend_schema`.
 
-There is **no Celery, Redis, allauth, dj-rest-auth, S3/Azure storage or Centrifugo** here. This is a
-PoC skeleton; authentication is the next story and does not exist yet. It is **session-cookie based** —
-`django.contrib.auth.login()` behind an `HttpOnly`, `SameSite=Lax` cookie, no token in the response body —
-because that is what [docs/auth-api.md](docs/auth-api.md) specifies.
+There is **no Celery, Redis, allauth, dj-rest-auth, S3/Azure storage or Centrifugo** here. Authentication is
+**session-cookie based** — `django.contrib.auth.login()` behind an `HttpOnly`, `SameSite=Lax` cookie, no
+token in the response body — because that is what [docs/auth-api.md](docs/auth-api.md) specifies. Login and
+the forgot-password entry point (ACC-01) have landed; registration (ACC-02) has not.
+
+Credentialed CORS runs through **django-cors-headers**: the frontend is a separate origin and sends
+`credentials: "include"`, so `CORS_ALLOW_CREDENTIALS` is on and `CORS_ALLOWED_ORIGINS` is an explicit list —
+that header is incompatible with a wildcard. Those origins must also be **same-site with the API host**, or
+the `SameSite=Lax` session cookie never comes back — a login that answers 200 and leaves the next request
+anonymous, with no error anywhere. That is a deploy-coordination item, not something the code checks.
 
 ## Common commands
 
@@ -45,9 +62,11 @@ because that is what [docs/auth-api.md](docs/auth-api.md) specifies.
 docker compose -f local.yml up -d
 docker compose -f local.yml down
 
-# Tests — full suite, a single module, coverage
+# Tests — full suite, a single module, one class or one test, by keyword, coverage
 docker compose -f local.yml run --rm app pytest
 docker compose -f local.yml run --rm app pytest loopstr/apps/users/tests/test_models.py
+docker compose -f local.yml run --rm app pytest loopstr/apps/users/tests/test_views.py::TestLoginViewLockout
+docker compose -f local.yml run --rm app pytest -k "lockout and not schema"
 docker compose -f local.yml run --rm app pytest --cov --cov-report term-missing
 
 # After any migration, the reused test database is stale
@@ -83,7 +102,8 @@ repository root — which is `/app` inside the container, and what `WORKDIR` gua
 - `loopstr/apps/common/` — shared primitives with no domain knowledge: the health-check endpoint, the docs
   routes, and `schema.py`, which appends what the generator cannot see from a view.
 - `loopstr/apps/users/` — the custom `User` model (email as `USERNAME_FIELD`, no username), its manager,
-  roles and admin registration.
+  roles and admin registration, plus the `/auth/*` endpoints: `serializers.py`, `services.py` (credentials,
+  lockout, session), `views.py`, `urls.py` and `exceptions.py`, which carries the contract's error envelope.
 - `loopstr/conftest.py` — the shared `api_client` and `user` fixtures; app-specific fixtures go in that app's
   `tests/conftest.py`.
 
@@ -97,8 +117,9 @@ path("api/v1/", include((api_urls, "api"), namespace="api"))   # config/urls.py
 reverse("api:users:auth:login")                                # the shape to expect
 ```
 
-`api_urls` is empty until the auth story lands; adding an app is one `path("", include(("users.urls", "users")))`
-line inside it.
+`api_urls` holds one `path("", include(("users.urls", "users")))` line today; adding an app is another one.
+The `/auth/*` routes are registered **without a trailing slash** — `APPEND_SLASH = False`, so `auth/login/`
+would 404 the contract's `/auth/login` instead of redirecting to it.
 
 Infrastructure endpoints sit **outside** that prefix: the health check is `common:health-check` at
 `/health-check/`, unauthenticated, so a probe does not have to know the API version. The documentation
@@ -108,6 +129,11 @@ Infrastructure endpoints sit **outside** that prefix: the health check is `commo
 
 - **`APPEND_SLASH = False`** — a request without the trailing slash 404s instead of redirecting. URLs must be
   hit exactly as declared.
+- **Email is stored lowercase.** `UserManager.normalize_email` lowercases the whole address — Django's own
+  version does the domain only — and `User.save()` applies it to every write, whatever wrote it. That is
+  what makes the column's `unique=True` mean "one address, one account". Look up a user by exact match on
+  the normalised address, not `iexact`: the stored value is already normalised, and `iexact` cannot use the
+  index.
 - **DRF defaults to `IsAuthenticated`.** Anything public says so explicitly, as `HealthCheckView` does with
   `permission_classes = (AllowAny,)` and empty `authentication_classes`.
 - **Nothing reads a `.env` file.** Compose injects the variables, so a new variable needs the container

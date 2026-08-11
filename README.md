@@ -2,8 +2,8 @@
 
 Backend PoC: Django 5.2 + Django REST Framework on PostgreSQL 17, running in Docker.
 
-The repository is a skeleton — a custom `User` model, an admin registration and a health-check endpoint.
-Authentication (login and registration) is the next story and is not implemented yet.
+The repository carries a custom `User` model, an admin registration, a health-check endpoint and the
+session-cookie login from ACC-01. Registration (ACC-02) is the next story and is not implemented yet.
 
 ## Stack
 
@@ -42,6 +42,21 @@ docker compose -f local.yml run --rm app python manage.py createsuperuser
 | `/docs/` | Swagger UI, rendered from the schema below | none |
 | `/schema/` | the raw OpenAPI 3 document | none |
 | `/health-check/` | liveness probe | none |
+| `POST /api/v1/auth/login` | signs a Member in and sets the session cookie | none |
+| `POST /api/v1/auth/forgot-password` | password-reset entry point | none |
+
+The `/auth/*` endpoints follow [docs/auth-api.md](docs/auth-api.md), the contract the frontend already
+ships against, rather than this project's usual DRF conventions: their errors are
+`{"code", "message"}` and their statuses (401, 423, 204) are chosen in the view. They also declare no
+authenticator, which is what lets the frontend post to them without a CSRF token — everything reachable
+after login keeps `SessionAuthentication`, and therefore keeps CSRF.
+
+Five consecutive failed logins lock an account for fifteen minutes; both numbers are environment
+variables, and both must be 1 or greater — the process refuses to start otherwise. "Remember me" is the
+difference between a 30-day cookie and one that dies with the browser.
+
+Email addresses are stored lowercase — normalised on every save — so one address is one account whatever
+case it is typed in.
 
 `/docs/` and `/schema/` are registered only while `DJANGO_API_DOCS_ENABLED` is on — it defaults to on,
 because the frontend team reads these pages in this PoC, and a deployment that turns it off gets a 404
@@ -50,6 +65,10 @@ internet access. Both sit outside `/api/v1/`, so the documentation is not versio
 it describes.
 
 `APPEND_SLASH = False`: every path above has to be requested exactly as written, trailing slash included.
+
+The frontend origins in `DJANGO_CORS_ALLOWED_ORIGINS` must share a registrable domain with the API's own
+host: the session cookie is `SameSite=Lax`, which a browser withholds cross-site, so a mismatch produces
+a login that answers 200 and leaves every later request anonymous — with no error on either side.
 
 ## Tests
 

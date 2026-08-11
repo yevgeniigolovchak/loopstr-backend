@@ -9,6 +9,9 @@ them instead of inventing its own.
 
 from django.conf import settings
 
+from drf_spectacular.utils import extend_schema_serializer
+from rest_framework import serializers
+
 # docs/auth-api.md → "Error codes". NETWORK_ERROR is in that list but is frontend-only — the client
 # raises it when fetch fails — so it is deliberately absent from what the API declares it returns.
 AUTH_ERROR_CODES = (
@@ -20,6 +23,20 @@ AUTH_ERROR_CODES = (
 
 COOKIE_SECURITY_SCHEME_NAME = "cookieAuth"
 ERROR_COMPONENT_NAME = "Error"
+
+
+@extend_schema_serializer(component_name=ERROR_COMPONENT_NAME)
+class ErrorSerializer(serializers.Serializer):
+    """The handle a view uses to point `@extend_schema` at the shared error component.
+
+    Nothing serialises through it — the auth views build their body from an exception. It exists so
+    an error response renders as `$ref: '#/components/schemas/Error'` instead of a copy of the
+    envelope inlined per view. `add_contract_components()` runs afterwards and replaces the
+    generated definition with the authoritative one, so the enum of codes stays in one place.
+    """
+
+    code = serializers.CharField()
+    message = serializers.CharField(required=False)
 
 
 def add_contract_components(result, generator, request, public):

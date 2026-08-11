@@ -1,5 +1,7 @@
 import sys
 
+from django.core.exceptions import ImproperlyConfigured
+
 import environ
 
 # loopstr/config/settings.py - 2 = loopstr/
@@ -30,6 +32,15 @@ env = environ.Env(
     DRF_PAGE_SIZE=(int, 20),
     # API documentation
     DJANGO_API_DOCS_ENABLED=(bool, True),
+    # Sessions
+    DJANGO_SESSION_COOKIE_SECURE=(bool, True),
+    DJANGO_SESSION_COOKIE_AGE=(int, 60 * 60 * 24 * 30),
+    # Cross-origin requests
+    DJANGO_CORS_ALLOWED_ORIGINS=(list, []),
+    DJANGO_CSRF_TRUSTED_ORIGINS=(list, []),
+    # Authentication
+    DJANGO_AUTH_LOCKOUT_MAX_ATTEMPTS=(int, 5),
+    DJANGO_AUTH_LOCKOUT_MINUTES=(int, 15),
 )
 
 # Django Core
@@ -77,6 +88,7 @@ DJANGO_APPS = (
     "django.contrib.admin",
 )
 THIRD_PARTY_APPS = (
+    "corsheaders",
     "rest_framework",
     "drf_spectacular",
     # Ships the Swagger UI assets as static files, so the docs page loads nothing from a CDN.
@@ -93,6 +105,9 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 # ------------------------------------------------------------------------------
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Above CommonMiddleware on purpose: that one answers some requests itself, and a response
+    # generated before this middleware runs would go out without the CORS headers.
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -154,6 +169,58 @@ STATICFILES_FINDERS = (
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth
 # ------------------------------------------------------------------------------
 AUTH_USER_MODEL = "users.User"
+
+# docs/auth-api.md fixes the cookie flags, so only `SECURE` is a variable: hardcoding it True
+# breaks local development, which speaks HTTP and would never get the cookie back, and hardcoding
+# it False ships a session readable off the wire. It defaults to True so an environment that
+# forgets the variable fails closed.
+SESSION_COOKIE_SECURE = env.bool("DJANGO_SESSION_COOKIE_SECURE")
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+# What "remember me" sets the session expiry to (ACC-01 #7). Without it the login view leaves the
+# session at browser-close, which is the unchecked case.
+SESSION_COOKIE_AGE = env.int("DJANGO_SESSION_COOKIE_AGE")
+
+# ACC-01 #6: five consecutive failures lock the account for fifteen minutes. This is state on the
+# user row, not a DRF throttle — a throttle counts requests per client and cannot express "this
+# account", and there is no Redis here to hold a shared counter.
+
+
+# Neither value has a meaningful reading below 1, and a wrong one is invisible until somebody fails
+# a login: `MAX_ATTEMPTS = 0` is compared against an already-incremented counter, so one typo locks
+# the account, and `MINUTES = 0` sets the lock to a moment that has already passed — the policy
+# reads as configured and does nothing. A plausible way to reach either is guessing that 0 turns
+# the feature off. This fails the process instead, at startup, naming the variable.
+def positive_int(name, value):
+    if value < 1:
+        raise ImproperlyConfigured(f"{name} must be 1 or greater; got {value}.")
+
+    return value
+
+
+AUTH_LOCKOUT_MAX_ATTEMPTS = positive_int(
+    "DJANGO_AUTH_LOCKOUT_MAX_ATTEMPTS",
+    env.int("DJANGO_AUTH_LOCKOUT_MAX_ATTEMPTS"),
+)
+AUTH_LOCKOUT_MINUTES = positive_int(
+    "DJANGO_AUTH_LOCKOUT_MINUTES",
+    env.int("DJANGO_AUTH_LOCKOUT_MINUTES"),
+)
+
+# Cross-Origin Requests
+# https://github.com/adamchainz/django-cors-headers
+# ------------------------------------------------------------------------------
+# The frontend runs on its own origin and sends `credentials: "include"`, so the session cookie
+# only survives the round trip while the response carries `Access-Control-Allow-Credentials`.
+# That header is incompatible with a wildcard origin, which is why this is an explicit list and
+# not `CORS_ALLOW_ALL_ORIGINS`.
+CORS_ALLOWED_ORIGINS = env.list("DJANGO_CORS_ALLOWED_ORIGINS")
+CORS_ALLOW_CREDENTIALS = True
+
+# The `/auth/*` endpoints declare no authenticator, so CSRF never runs on them. Everything
+# reachable after login keeps `SessionAuthentication` and therefore keeps CSRF, and Django matches
+# the `Origin` header of those requests against this list.
+CSRF_TRUSTED_ORIGINS = env.list("DJANGO_CSRF_TRUSTED_ORIGINS")
 
 # Django REST Framework
 # https://www.django-rest-framework.org/api-guide/settings/
@@ -220,6 +287,13 @@ LOGGING = {
     },
     "loggers": {
         "django": {
+            "handlers": ["console"],
+            "propagate": True,
+            "level": "INFO",
+        },
+        # The authentication audit trail is logged at INFO. Without an entry here the lines would
+        # reach a root logger that has no handler and go nowhere.
+        "users": {
             "handlers": ["console"],
             "propagate": True,
             "level": "INFO",

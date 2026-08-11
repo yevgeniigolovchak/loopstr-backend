@@ -4,7 +4,9 @@ from django.urls import include, path
 
 # Every API app is mounted here with its own sub-namespace, so a reverse reads
 # as `api:<app>:<sub>:<name>` — for example `api:users:auth:login`.
-api_urls = []
+api_urls = [
+    path("", include(("users.urls", "users"))),
+]
 
 urlpatterns = [
     # Django Admin, use {% url 'admin:index' %}

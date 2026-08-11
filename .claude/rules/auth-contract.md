@@ -39,13 +39,28 @@ enumeration trade-off from ACC-02; login and forgot-password stay generic (`INVA
 
 **Lockout is server state, not a throttle.** Five consecutive failures lock the account for 15 minutes; a
 DRF throttle counts requests per client and cannot express "this account". With no Redis in this project,
-the counter lives in the database. Rate limits (per account, per IP) are a separate, additional layer.
+the counter lives in the database. Rate limits (per account, per IP) are a separate, additional layer that
+the contract asks for and **this PoC does not implement** — it is out of the ACC-01 story's scope. Do not
+add one without that being asked for.
 
 | Trap | What actually happens |
 |---|---|
-| `raise AuthenticationFailed` for bad credentials | DRF rewrites 401 → **403** when the view has no authenticator. Return the 401 response explicitly. |
+| `raise AuthenticationFailed` for bad credentials | DRF rewrites 401 → **403** when the view has no authenticator. Raise an `APIException` subclass carrying the status instead — that is what `users/exceptions.py` is. |
 | Route registered as `auth/login/` | `APPEND_SLASH = False`, so the contract's `/auth/login` **404s**. Register auth paths without the trailing slash. |
-| Password validators left at Django's defaults | The contract promises "≥8 chars, a letter and a number"; our validators also reject common and user-similar passwords, with no contract code to express that. Decide the mapping before implementing. |
+| `login(request, user)` with DRF's request | `rotate_token()` flags the object it is handed, and `CsrfViewMiddleware` only reads the original. The CSRF cookie is never reset. Pass `request._request`. |
+| `authenticate(username=<the submitted email>)` | The lookup normalises the address, but `ModelBackend` resolves the natural key **exactly** against whatever you hand it. A differently-cased email fails with the right password and charges the account an attempt. Pass `user.email` from the row. |
+| A different `message` per failure reason | `message` ships in the response body. Two texts behind one `INVALID_CREDENTIALS` re-open the enumeration hole the shared code closes. Keep the string identical; put the distinction in the log line. |
+
+**Password validators: decided, lands with ACC-02.** Login never validates a password, so ACC-01 leaves
+`AUTH_PASSWORD_VALIDATORS` alone. The contract promises "≥8 chars, a letter and a number" and the client
+recognises no code for a rejected password, so any rule stricter than the client's fires only after the
+client has already said yes, and renders as an unexplained `UNKNOWN_ERROR`. The mapping: keep
+`MinimumLengthValidator` with an explicit `min_length: 8`, add a `LetterAndNumberValidator` in
+`common/validators.py` for the part Django has no rule for, drop `NumericPasswordValidator` (it can never
+fire once a letter is required) and `UserAttributeSimilarityValidator` (the likeliest source of a mystery
+rejection), and keep `CommonPasswordValidator` — a bad message beats a guessable password. A validator
+failure answers 400 `UNKNOWN_ERROR` with the joined messages in `message`. Closing that properly needs a
+new code (`WEAK_PASSWORD`) in a later revision of `docs/auth-api.md`.
 
 **Every `/auth/*` response is declared with `@extend_schema`.** drf-spectacular reads serializers, and
 the statuses this contract names are chosen in the view rather than raised by one — no serializer implies
