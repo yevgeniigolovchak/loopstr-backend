@@ -1,0 +1,13 @@
+psycopg2-binary==2.9.12  # https://github.com/psycopg/psycopg2
+
+# Django
+# ------------------------------------------------------------------------------
+django==5.2.13  # https://www.djangoproject.com/
+django-environ==0.13.0  # https://github.com/joke2k/django-environ
+django-model-utils==5.0.0  # https://github.com/jazzband/django-model-utils
+
+# Django REST Framework
+# ------------------------------------------------------------------------------
+djangorestframework==3.17.1  # https://github.com/encode/django-rest-framework
+drf-spectacular==0.30.0  # https://github.com/tfranzel/drf-spectacular
+drf-spectacular-sidecar==2026.8.1  # https://github.com/tfranzel/drf-spectacular-sidecar

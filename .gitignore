@@ -1,0 +1,62 @@
+### Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+### Environments
+.env
+.envs/
+docker/*/.env
+.venv
+venv/
+ENV/
+
+### Django
+staticfiles/
+loopstr/media/
+*.log
+
+### Tests and coverage
+.pytest_cache/
+.cache
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+
+### Translations
+*.mo
+*.pot
+
+### Type checkers and linters
+.mypy_cache/
+.ruff_cache/
+
+### IDE
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.iws
+out/
+
+### OS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Desktop.ini
+*~
+
+### Claude
+.mcp.json

@@ -1,0 +1,4 @@
+# Code quality
+# ------------------------------------------------------------------------------
+coverage==7.13.5  # https://github.com/nedbat/coveragepy
+pytest-cov==7.1.0  # https://github.com/pytest-dev/pytest-cov

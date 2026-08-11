@@ -1,0 +1,57 @@
+<!--
+  Skeleton for a project rule. Copy to <project>/.claude/rules/<topic>.md and fill in.
+
+  Do NOT keep this file inside .claude/rules/ — every .md there is discovered
+  recursively, so an unfilled example would load as a real rule.
+
+  A rule is the guarantee, a skill is the explanation. Rules load unconditionally
+  for every file matching `paths`, so they carry the "always / never" list and link
+  out for the reasoning. Target 25 lines; if it grows past that, what you are
+  writing is a skill.
+
+  One file per topic or per app. Name it after the topic: reports.md, users-auth.md.
+
+  Belongs here: invariants of this app that fail silently, contracts between two
+  modules, the reason a surprising decision was made deliberately.
+
+  Does not: anything a reader can see in the code, anything the generic rules or a
+  skill already cover, step-by-step procedures.
+-->
+
+---
+paths:
+  - "**/apps/<app>/**"
+---
+
+# <Topic>
+
+<!-- One or two sentences: what this app owns, and the single invariant that holds
+     across it. If a newcomer breaks one thing here, this is the thing. -->
+
+<!-- Then the rules. Lead each with the imperative in bold, then say what breaks
+     without it — a rule whose consequence is unstated gets treated as a preference.
+
+**Never <do X> by hand.** <What it drifts from, and why the derived value is right.>
+
+**<Contract between two modules>.** <What must change in the same commit, and what
+silently rots if it doesn't.>
+-->
+
+<!-- A table when the rule is a mapping — status to allowed operations, override to
+     effect. Prose loses these.
+
+| <Status> | Allowed |
+|---|---|
+| `<value>` | <what may happen in this state> |
+-->
+
+<!-- A blockquote for the trap that returns success while doing nothing. These are
+     the entries that justify the rule existing at all.
+
+> ⚠️ <The call that looks correct and silently does nothing.>
+-->
+
+<!-- Close with a link when a skill covers the general case.
+
+Details: [<skill-name>](../skills/<skill-name>/SKILL.md)
+-->
