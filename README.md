@@ -21,7 +21,6 @@ session-cookie `/auth/*` endpoints from ACC-01 and ACC-02.
 ```bash
 cp envs.example/app.env docker/app/.env
 cp envs.example/db.env docker/db/.env
-# fill in DJANGO_SECRET_KEY and POSTGRES_PASSWORD — both files are gitignored
 
 docker compose -f local.yml build
 docker compose -f local.yml up -d
