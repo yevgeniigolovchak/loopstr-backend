@@ -147,11 +147,26 @@ TEMPLATES = [
 # Django Password Management
 # https://docs.djangoproject.com/en/5.2/topics/auth/passwords/#enabling-password-validation
 # ------------------------------------------------------------------------------
+# ACC-02 #3 promises exactly "at least 8 characters, one letter and one number", and that is the
+# whole set: the rule the story states, and nothing the story does not. Password strength beyond the
+# criterion is a decision to be asked for, not one to infer — and the frontend recognises no error
+# code for a rejected password, so every rule added here fires after the client has already said yes
+# and renders as an unexplained `UNKNOWN_ERROR`.
+#
+# What that leaves out, so the next reader does not re-add it as an oversight: `CommonPasswordValidator`
+# (`password123` is accepted), `UserAttributeSimilarityValidator` (a password equal to the account's
+# own address is accepted — it also does nothing unless `validate_password` is passed a `user`, which
+# is why re-adding it is never a one-line change), and `NumericPasswordValidator`, which could never
+# fire anyway once a letter is required. Any of them is a scope question for the story owner.
+#
+# `min_length` is spelled out even though 8 is the default: the number is the requirement's, and it
+# belongs where a reader looking for it will be.
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
-    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
-    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 8},
+    },
+    {"NAME": "common.validators.LetterAndNumberValidator"},
 ]
 
 # Django Static Files

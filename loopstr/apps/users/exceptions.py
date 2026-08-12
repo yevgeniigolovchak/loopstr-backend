@@ -44,6 +44,18 @@ class InvalidCredentials(AuthError):
     error_code = "INVALID_CREDENTIALS"
 
 
+class EmailTaken(AuthError):
+    """An account already holds the submitted address (ACC-02 #5).
+
+    The one `/auth/*` answer that reveals whether an account exists, and deliberately so: the user
+    is told to log in instead. Login and forgot-password stay generic — the inconsistency is the
+    requirement, not an oversight to reconcile.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    error_code = "EMAIL_TAKEN"
+
+
 class AccountLocked(AuthError):
     """The account is locked after too many consecutive failures (ACC-01 #6).
 

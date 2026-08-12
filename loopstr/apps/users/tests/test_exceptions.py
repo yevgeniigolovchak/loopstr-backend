@@ -3,9 +3,9 @@ from rest_framework import status
 from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated
 
 from common.schema import AUTH_ERROR_CODES
-from users.exceptions import AccountLocked, AuthError, InvalidCredentials, InvalidRequest
+from users.exceptions import AccountLocked, AuthError, EmailTaken, InvalidCredentials, InvalidRequest
 
-AUTH_ERRORS = (AuthError, InvalidRequest, InvalidCredentials, AccountLocked)
+AUTH_ERRORS = (AuthError, InvalidRequest, InvalidCredentials, EmailTaken, AccountLocked)
 
 
 class TestAuthError:
@@ -39,6 +39,7 @@ class TestAuthError:
             (AuthError, status.HTTP_400_BAD_REQUEST),
             (InvalidRequest, status.HTTP_400_BAD_REQUEST),
             (InvalidCredentials, status.HTTP_401_UNAUTHORIZED),
+            (EmailTaken, status.HTTP_409_CONFLICT),
             (AccountLocked, status.HTTP_423_LOCKED),
         ],
     )

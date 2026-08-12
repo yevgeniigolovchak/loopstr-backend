@@ -6,21 +6,25 @@ from rest_framework.views import APIView
 
 from common.schema import ErrorSerializer
 from users.exceptions import InvalidRequest
-from users.serializers import ForgotPasswordSerializer, LoginSerializer
-from users.services import authenticate_member, request_password_reset
+from users.serializers import ForgotPasswordSerializer, LoginSerializer, RegisterSerializer
+from users.services import authenticate_member, register_member, request_password_reset
 
-# The cookie is the entire result of a login, and nothing in the response body implies it, so it is
-# declared as a response header rather than left for a reader to infer.
-SESSION_COOKIE_HEADER = OpenApiParameter(
-    name="Set-Cookie",
-    type=str,
-    location=OpenApiParameter.HEADER,
-    response=[status.HTTP_200_OK],
-    description=(
-        "The session cookie: `HttpOnly`, `Secure`, `SameSite=Lax`. It carries `Max-Age` only when "
-        "`rememberMe` was true; otherwise it expires when the browser closes."
-    ),
-)
+
+def session_cookie_header(response_status, expiry):
+    """The `Set-Cookie` a successful authentication answers with.
+
+    The cookie is the entire result of these endpoints and nothing in the response body implies it,
+    so it is declared rather than left for a reader to infer. Both endpoints set the same cookie
+    with the same flags — stated once here — and differ in the status that carries it (login answers
+    200, registration 201) and in how long it lives, which is what `expiry` says.
+    """
+    return OpenApiParameter(
+        name="Set-Cookie",
+        type=str,
+        location=OpenApiParameter.HEADER,
+        response=[response_status],
+        description=f"The session cookie: `HttpOnly`, `Secure`, `SameSite=Lax`. {expiry}",
+    )
 
 
 def describe_errors(errors):
@@ -42,7 +46,13 @@ def describe_errors(errors):
     request=LoginSerializer,
     # This endpoint establishes the session rather than requiring one.
     auth=[],
-    parameters=[SESSION_COOKIE_HEADER],
+    parameters=[
+        session_cookie_header(
+            status.HTTP_200_OK,
+            "It carries `Max-Age` only when `rememberMe` was true; otherwise it expires when the "
+            "browser closes.",
+        ),
+    ],
     responses={
         status.HTTP_200_OK: OpenApiResponse(description="Signed in. The session cookie is set."),
         status.HTTP_400_BAD_REQUEST: OpenApiResponse(
@@ -89,6 +99,63 @@ class LoginView(APIView):
         authenticate_member(request._request, **serializer.validated_data)
 
         return Response(status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=["auth"],
+    summary="Register",
+    description=(
+        "Creates a Member account and establishes the session cookie, so the new user is already "
+        "signed in (ACC-02 #6). The body of a success is empty. \"Confirm password\" is not part of "
+        "the request: the mismatch check is the client's."
+    ),
+    request=RegisterSerializer,
+    auth=[],
+    parameters=[
+        session_cookie_header(
+            status.HTTP_201_CREATED,
+            "It never carries `Max-Age`: registration has no \"remember me\", so the session ends "
+            "when the browser closes.",
+        ),
+    ],
+    responses={
+        status.HTTP_201_CREATED: OpenApiResponse(description="Account created. The session cookie is set."),
+        status.HTTP_400_BAD_REQUEST: OpenApiResponse(
+            response=ErrorSerializer,
+            description=(
+                "`UNKNOWN_ERROR` — the request body is missing a field or malformed, or the "
+                "password fails `AUTH_PASSWORD_VALIDATORS`. The contract has no code for a rejected "
+                "password; the reasons are in `message`."
+            ),
+        ),
+        status.HTTP_409_CONFLICT: OpenApiResponse(
+            response=ErrorSerializer,
+            description=(
+                "`EMAIL_TAKEN` — an account already holds that address. The one `/auth/*` answer "
+                "that reveals whether an account exists, so the user can be told to log in instead."
+            ),
+        ),
+    },
+)
+class RegisterView(APIView):
+    """`POST /auth/register` — docs/auth-api.md.
+
+    Declared like `LoginView`, and for the same reasons: no authenticator, so nothing enforces a
+    CSRF token the frontend does not send, and `AllowAny` because DRF defaults to `IsAuthenticated`.
+    """
+
+    authentication_classes = ()
+    permission_classes = (AllowAny,)
+
+    def post(self, request, *args, **kwargs):
+        serializer = RegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            raise InvalidRequest(describe_errors(serializer.errors))
+
+        # `request._request` for `login()`'s `rotate_token()`, as on the login path.
+        register_member(request._request, **serializer.validated_data)
+
+        return Response(status=status.HTTP_201_CREATED)
 
 
 @extend_schema(

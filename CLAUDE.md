@@ -13,9 +13,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   where it disagrees with a rule, it wins, because the client already ships against it. What that costs us
   is in [auth-contract](.claude/rules/auth-contract.md).
 - **`docs/PoC Scope Login, Authorization & Homepage.pdf`** — the acceptance criteria the work is measured
-  against. Its text cannot be extracted here: the file uses subset fonts whose `ToUnicode` maps cover only
-  ligatures, and there is no `pdftotext`, `pypdf`, `mutool` or `qpdf` in the image or on the host. Ask for
-  the page rather than inferring what a criterion says.
+  against, and the authority on scope. Read it with `pdftotext -layout "<path>" -`, which needs poppler on
+  the host (`brew install poppler`); it is not in the image, so this is one of the few things that does not
+  run through Compose. Without it, ask for the page rather than inferring what a criterion says — the file
+  uses subset fonts whose `ToUnicode` maps cover only ligatures, so a reader that falls back to the
+  embedded text layer gets nothing usable. It carries three stories: ACC-01 Login, ACC-02 Registration and
+  HOME-01 Homepage, of which the first two are implemented.
 - **This file** — stack, commands, layout, and the cross-cutting facts that belong to no single app.
 
 Don't duplicate a rule or a skill here. Domain detail belongs in the rule for its app.
@@ -47,7 +50,9 @@ skill says drf-yasg, it means drf-spectacular here — `@swagger_auto_schema` is
 There is **no Celery, Redis, allauth, dj-rest-auth, S3/Azure storage or Centrifugo** here. Authentication is
 **session-cookie based** — `django.contrib.auth.login()` behind an `HttpOnly`, `SameSite=Lax` cookie, no
 token in the response body — because that is what [docs/auth-api.md](docs/auth-api.md) specifies. Login and
-the forgot-password entry point (ACC-01) have landed; registration (ACC-02) has not.
+the forgot-password entry point (ACC-01) and registration (ACC-02) have landed; the endpoints in the
+contract are all of them. Registration signs the new account in the same way and gets a browser-session
+cookie: it has no "remember me", so the expiry is set explicitly rather than left at `SESSION_COOKIE_AGE`.
 
 Credentialed CORS runs through **django-cors-headers**: the frontend is a separate origin and sends
 `credentials: "include"`, so `CORS_ALLOW_CREDENTIALS` is on and `CORS_ALLOWED_ORIGINS` is an explicit list —

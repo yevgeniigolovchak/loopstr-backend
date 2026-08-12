@@ -3,7 +3,7 @@
 Backend PoC: Django 5.2 + Django REST Framework on PostgreSQL 17, running in Docker.
 
 The repository carries a custom `User` model, an admin registration, a health-check endpoint and the
-session-cookie login from ACC-01. Registration (ACC-02) is the next story and is not implemented yet.
+session-cookie `/auth/*` endpoints from ACC-01 and ACC-02.
 
 ## Stack
 
@@ -43,6 +43,7 @@ docker compose -f local.yml run --rm app python manage.py createsuperuser
 | `/schema/` | the raw OpenAPI 3 document | none |
 | `/health-check/` | liveness probe | none |
 | `POST /api/v1/auth/login` | signs a Member in and sets the session cookie | none |
+| `POST /api/v1/auth/register` | creates a Member account and signs it in | none |
 | `POST /api/v1/auth/forgot-password` | password-reset entry point | none |
 
 The `/auth/*` endpoints follow [docs/auth-api.md](docs/auth-api.md), the contract the frontend already
