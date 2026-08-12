@@ -10,13 +10,38 @@ import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from common.schema import AUTH_ERROR_CODES, ERROR_COMPONENT_NAME
+from common.schema import (
+    AUTH_ERROR_CODES,
+    COOKIE_SECURITY_SCHEME_NAME,
+    DETAIL_COMPONENT_NAME,
+    ERROR_COMPONENT_NAME,
+)
 from users.models import User
 from users.tests.factories import USER_PASSWORD, UserFactory
 
 pytestmark = pytest.mark.django_db
 
 SESSION_USER_KEY = "_auth_user_id"
+
+# What every endpoint that answers with an account publishes, and the whole of it. Asserted as a set
+# in its own right: a column added to the row must not reach a payload by being added to a model.
+ACCOUNT_FIELDS = {"id", "email", "fullName", "role"}
+
+# The component the three account-bearing responses share in the published schema. drf-spectacular
+# names it after the serializer with the suffix dropped.
+ACCOUNT_COMPONENT_NAME = "SessionUser"
+
+
+def account_of(user):
+    """The body those endpoints answer with for `user`."""
+    return {
+        "user": {
+            "id": user.pk,
+            "email": user.email,
+            "fullName": user.full_name,
+            "role": user.role,
+        },
+    }
 
 
 def fail_login(api_client, member, times):
@@ -37,12 +62,18 @@ class TestLoginView:
         assert settings.SESSION_COOKIE_NAME in response.cookies
         assert api_client.session[SESSION_USER_KEY] == str(member.pk)
 
-    def test_success_returns_no_body(self, api_client, credentials):
-        # The contract does not have the frontend read one, and inventing a shape here would fix a
-        # payload the next story has to keep.
+    def test_success_returns_the_signed_in_account(self, api_client, credentials, member):
         response = api_client.post(reverse("api:users:auth:login"), credentials)
 
-        assert response.content == b""
+        assert response.data == account_of(member)
+
+    def test_the_body_carries_the_published_fields_and_nothing_else(self, api_client, credentials):
+        # The row also holds the password hash, the staff and superuser flags and the lockout
+        # counters. Only an assertion on the whole set catches one of them joining the payload.
+        response = api_client.post(reverse("api:users:auth:login"), credentials)
+
+        assert set(response.data) == {"user"}
+        assert set(response.data["user"]) == ACCOUNT_FIELDS
 
     def test_remember_me_keeps_the_session_for_the_configured_age(self, api_client, credentials):
         response = api_client.post(reverse("api:users:auth:login"), {**credentials, "rememberMe": True})
@@ -362,10 +393,17 @@ class TestRegisterView:
 
         assert response.status_code == status.HTTP_200_OK
 
-    def test_success_returns_no_body(self, api_client, registration):
+    def test_success_returns_the_new_account(self, api_client, registration):
         response = api_client.post(reverse("api:users:auth:register"), registration)
 
-        assert response.content == b""
+        user = User.objects.get(email=registration["email"])
+        assert response.data == account_of(user)
+
+    def test_the_body_carries_the_published_fields_and_nothing_else(self, api_client, registration):
+        response = api_client.post(reverse("api:users:auth:register"), registration)
+
+        assert set(response.data) == {"user"}
+        assert set(response.data["user"]) == ACCOUNT_FIELDS
 
     def test_the_session_cookie_dies_with_the_browser(self, api_client, registration):
         # The contract's registration cookie carries no `Max-Age`: ACC-02 has no "remember me".
@@ -628,6 +666,101 @@ class TestForgotPasswordView:
         assert member.email not in caplog.text
 
 
+class TestCurrentUserView:
+    """`GET /users/me` — the account behind the session cookie.
+
+    The cookie is `HttpOnly`, so a client that reloads the page can see that it *has* a session but
+    nothing about whose it is. This endpoint is the answer, and it is the only way the frontend
+    learns a name or a role without keeping the login response in memory.
+    """
+
+    def test_a_signed_in_member_reads_its_own_account(self, api_client, credentials, member):
+        api_client.post(reverse("api:users:auth:login"), credentials)
+
+        response = api_client.get(reverse("api:users:current-user"))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == account_of(member)
+
+    def test_it_answers_exactly_what_login_answered(self, api_client, credentials):
+        # One shape across the three endpoints is the point of the wrapper: a client parses the
+        # login response and this one with the same code.
+        login = api_client.post(reverse("api:users:auth:login"), credentials)
+
+        response = api_client.get(reverse("api:users:current-user"))
+
+        assert response.data == login.data
+
+    def test_it_answers_exactly_what_registration_answered(self, api_client, registration):
+        created = api_client.post(reverse("api:users:auth:register"), registration)
+
+        response = api_client.get(reverse("api:users:current-user"))
+
+        assert response.data == created.data
+
+    def test_the_body_carries_the_published_fields_and_nothing_else(self, api_client, credentials):
+        api_client.post(reverse("api:users:auth:login"), credentials)
+
+        response = api_client.get(reverse("api:users:current-user"))
+
+        assert set(response.data) == {"user"}
+        assert set(response.data["user"]) == ACCOUNT_FIELDS
+
+    def test_the_role_is_the_one_the_row_holds(self, api_client, credentials):
+        api_client.post(reverse("api:users:auth:login"), credentials)
+
+        response = api_client.get(reverse("api:users:current-user"))
+
+        assert response.data["user"]["role"] == User.ROLES.member
+
+    def test_an_anonymous_request_is_refused(self, api_client):
+        # 403 rather than 401: `SessionAuthentication` publishes no `WWW-Authenticate` header and
+        # DRF rewrites the status when it has none to send. The frontend reads it as "not signed in".
+        # The body is asserted as a whole because the shape is the contract here: this endpoint is
+        # not `/auth/*`, so a later "unification" onto the `{"code", "message"}` envelope is a
+        # contract break rather than a cleanup, and the status alone would not notice it.
+        response = api_client.get(reverse("api:users:current-user"))
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert set(response.data) == {"detail"}
+
+    def test_a_deactivated_account_stops_being_readable(self, api_client, credentials, member):
+        # The session outlives the flag; the authentication backend refuses to resolve the row.
+        api_client.post(reverse("api:users:auth:login"), credentials)
+        member.is_active = False
+        member.save(update_fields=("is_active",))
+
+        response = api_client.get(reverse("api:users:current-user"))
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert set(response.data) == {"detail"}
+
+    def test_a_read_needs_no_csrf_token(self, credentials):
+        # Unlike the auth views this one keeps `SessionAuthentication`, so CSRF enforcement is live —
+        # and Django exempts the safe methods, which is why a GET still costs the client nothing.
+        api_client = APIClient(enforce_csrf_checks=True)
+        api_client.post(reverse("api:users:auth:login"), credentials)
+
+        response = api_client.get(reverse("api:users:current-user"))
+
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_post_is_not_allowed(self, api_client, credentials):
+        api_client.post(reverse("api:users:auth:login"), credentials)
+
+        response = api_client.post(reverse("api:users:current-user"), {"fullName": "Someone Else"})
+
+        assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+
+    def test_the_route_carries_no_trailing_slash(self, api_client, credentials):
+        assert reverse("api:users:current-user") == "/api/v1/users/me"
+        api_client.post(reverse("api:users:auth:login"), credentials)
+
+        response = api_client.get("/api/v1/users/me/")
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
 class TestCorsPreflight:
     """The frontend is a separate origin sending `credentials: "include"`; without the grant below
     the browser drops the login response before any code sees it."""
@@ -710,3 +843,55 @@ class TestAuthSchema:
         for code in error_statuses:
             body = operation["responses"][code]["content"]["application/json"]["schema"]
             assert body["$ref"] == f"#/components/schemas/{ERROR_COMPONENT_NAME}"
+
+
+class TestCurrentUserSchema:
+    def test_it_declares_its_statuses(self, api_client):
+        schema = api_client.get(reverse("common:schema")).data
+
+        operation = schema["paths"][reverse("api:users:current-user")]["get"]
+        assert set(operation["responses"]) == {"200", "403"}
+
+    def test_its_failure_is_declared_in_the_shape_it_answers(self, api_client):
+        # DRF renders `{"detail": ...}` from an exception, so a response left undeclared publishes
+        # no body at all — and this is the branch a client hits on every reload of a stale session,
+        # which makes it the failure most worth a type. Deliberately not the `Error` component: this
+        # endpoint is outside `/auth/*` and answers the project's own shape.
+        schema = api_client.get(reverse("common:schema")).data
+
+        operation = schema["paths"][reverse("api:users:current-user")]["get"]
+        body = operation["responses"]["403"]["content"]["application/json"]["schema"]
+        assert body["$ref"] == f"#/components/schemas/{DETAIL_COMPONENT_NAME}"
+
+    def test_it_declares_the_session_cookie_it_reads(self, api_client):
+        # The only endpoint here that consumes the cookie rather than setting it, and the only
+        # reason the security scheme in `common.schema` is referenced by anything at all.
+        schema = api_client.get(reverse("common:schema")).data
+
+        operation = schema["paths"][reverse("api:users:current-user")]["get"]
+        assert {COOKIE_SECURITY_SCHEME_NAME: []} in operation["security"]
+
+    def test_it_is_not_reachable_anonymously_in_the_document(self, api_client):
+        # An empty requirement object means "no credentials will do" — publishing one alongside the
+        # cookie would tell a generated client the endpoint answers without a session.
+        schema = api_client.get(reverse("common:schema")).data
+
+        operation = schema["paths"][reverse("api:users:current-user")]["get"]
+        assert {} not in operation["security"]
+
+    @pytest.mark.parametrize(
+        "url_name,method,success",
+        [
+            ("api:users:auth:login", "post", "200"),
+            ("api:users:auth:register", "post", "201"),
+            ("api:users:current-user", "get", "200"),
+        ],
+    )
+    def test_every_account_response_is_the_same_component(self, api_client, url_name, method, success):
+        # Three endpoints, one shape — and one place a field is added to. Inlining it per view is
+        # how they drift into answering three slightly different accounts.
+        schema = api_client.get(reverse("common:schema")).data
+
+        operation = schema["paths"][reverse(url_name)][method]
+        body = operation["responses"][success]["content"]["application/json"]["schema"]
+        assert body["$ref"] == f"#/components/schemas/{ACCOUNT_COMPONENT_NAME}"

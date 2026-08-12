@@ -28,12 +28,17 @@ class TestApiDocumentation:
         assert response.data["openapi"].startswith("3.")
 
     def test_schema_declares_the_session_cookie(self, api_client):
+        # The type and the name come from drf-spectacular's own `SessionScheme`, which registers
+        # them because an endpoint authenticates with the cookie; the description is the only part
+        # `add_contract_components` supplies. Asserting all four is what catches the hook and the
+        # generator disagreeing about the same scheme.
         response = api_client.get(reverse("common:schema"))
 
         cookie_scheme = response.data["components"]["securitySchemes"][COOKIE_SECURITY_SCHEME_NAME]
         assert cookie_scheme["type"] == "apiKey"
         assert cookie_scheme["in"] == "cookie"
         assert cookie_scheme["name"] == settings.SESSION_COOKIE_NAME
+        assert "HttpOnly" in cookie_scheme["description"]
 
     def test_schema_declares_the_error_envelope(self, api_client):
         response = api_client.get(reverse("common:schema"))

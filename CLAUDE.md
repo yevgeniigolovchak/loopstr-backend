@@ -9,9 +9,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   touches matching files.
 - **`.claude/rules/`** — short always-on rules. The generic ones mirror the skills; project rules carry this
   repository's domain and are scoped to their app path.
-- **`docs/auth-api.md`** — the frontend's published contract for `/auth/*`, and the source of truth for it:
-  where it disagrees with a rule, it wins, because the client already ships against it. What that costs us
-  is in [auth-contract](.claude/rules/auth-contract.md).
+- **`docs/auth-api.md`** — the frontend's published contract for `/auth/*` and for `GET /users/me`, and the
+  source of truth for both: where it disagrees with a rule, it wins, because the client ships against it.
+  What that costs us is in [auth-contract](.claude/rules/auth-contract.md), which also records how the
+  `/users/me` section got there — it is the one part this side wrote, and agreement came before the edit.
 - **`docs/PoC Scope Login, Authorization & Homepage.pdf`** — the acceptance criteria the work is measured
   against, and the authority on scope. Read it with `pdftotext -layout "<path>" -`, which needs poppler on
   the host (`brew install poppler`); it is not in the image, so this is one of the few things that does not
@@ -50,9 +51,13 @@ skill says drf-yasg, it means drf-spectacular here — `@swagger_auto_schema` is
 There is **no Celery, Redis, allauth, dj-rest-auth, S3/Azure storage or Centrifugo** here. Authentication is
 **session-cookie based** — `django.contrib.auth.login()` behind an `HttpOnly`, `SameSite=Lax` cookie, no
 token in the response body — because that is what [docs/auth-api.md](docs/auth-api.md) specifies. Login and
-the forgot-password entry point (ACC-01) and registration (ACC-02) have landed; the endpoints in the
-contract are all of them. Registration signs the new account in the same way and gets a browser-session
-cookie: it has no "remember me", so the expiry is set explicitly rather than left at `SESSION_COOKIE_AGE`.
+the forgot-password entry point (ACC-01) and registration (ACC-02) have landed, along with `GET /users/me`,
+which reads the account behind the session — that one is in no ACC story, it is what the signed-in pages
+need, and it was settled with the frontend developer first and written into the contract afterwards. Those
+four are the whole of the API. A success on login and registration answers with that same account object —
+the cookie stays the only credential. Registration signs the new account in the same way and gets a
+browser-session cookie: it has no "remember me", so the expiry is set explicitly rather than left at
+`SESSION_COOKIE_AGE`.
 
 Credentialed CORS runs through **django-cors-headers**: the frontend is a separate origin and sends
 `credentials: "include"`, so `CORS_ALLOW_CREDENTIALS` is on and `CORS_ALLOWED_ORIGINS` is an explicit list —
@@ -107,8 +112,9 @@ repository root — which is `/app` inside the container, and what `WORKDIR` gua
 - `loopstr/apps/common/` — shared primitives with no domain knowledge: the health-check endpoint, the docs
   routes, and `schema.py`, which appends what the generator cannot see from a view.
 - `loopstr/apps/users/` — the custom `User` model (email as `USERNAME_FIELD`, no username), its manager,
-  roles and admin registration, plus the `/auth/*` endpoints: `serializers.py`, `services.py` (credentials,
-  lockout, session), `views.py`, `urls.py` and `exceptions.py`, which carries the contract's error envelope.
+  roles and admin registration, plus the `/auth/*` endpoints and `GET /users/me`: `serializers.py`,
+  `services.py` (credentials, lockout, session), `views.py`, `urls.py` and `exceptions.py`, which carries
+  the contract's error envelope — and applies to `/auth/*` only.
 - `loopstr/conftest.py` — the shared `api_client` and `user` fixtures; app-specific fixtures go in that app's
   `tests/conftest.py`.
 
@@ -123,7 +129,9 @@ reverse("api:users:auth:login")                                # the shape to ex
 ```
 
 `api_urls` holds one `path("", include(("users.urls", "users")))` line today; adding an app is another one.
-The `/auth/*` routes are registered **without a trailing slash** — `APPEND_SLASH = False`, so `auth/login/`
+A route that belongs to no sub-namespace reverses one level shorter — `api:users:current-user` for
+`/api/v1/users/me`, which sits outside `/auth/` because it reads a session rather than opening one. Every
+route in this app is registered **without a trailing slash** — `APPEND_SLASH = False`, so `auth/login/`
 would 404 the contract's `/auth/login` instead of redirecting to it.
 
 Infrastructure endpoints sit **outside** that prefix: the health check is `common:health-check` at

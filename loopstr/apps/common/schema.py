@@ -1,10 +1,12 @@
 """OpenAPI pieces the generator cannot derive from a view.
 
-drf-spectacular builds the document from the views it can see. Two things this API publishes are
-invisible to it today: the session cookie, because no endpoint authenticates with one yet, and the
-error envelope, which the auth views build by hand rather than through a serializer. Both come from
-docs/auth-api.md, and both are appended here so the first `/auth/*` endpoint to land can reference
-them instead of inventing its own.
+drf-spectacular builds the document from the views it can see, and what it cannot read off them
+comes from docs/auth-api.md and is appended here, so an endpoint references one definition instead
+of inventing its own. Two kinds of thing land in that gap. The failure bodies are one: both the
+auth envelope and DRF's own `{"detail": ...}` are built from an exception rather than through a
+serializer, so nothing in a view declares either. The session cookie is the other, and only partly
+— `GET /users/me` keeps `SessionAuthentication`, so the generator's own `SessionScheme` registers
+`cookieAuth` by itself; what it cannot know is what that cookie is and which endpoints set it.
 """
 
 from django.conf import settings
@@ -23,6 +25,7 @@ AUTH_ERROR_CODES = (
 
 COOKIE_SECURITY_SCHEME_NAME = "cookieAuth"
 ERROR_COMPONENT_NAME = "Error"
+DETAIL_COMPONENT_NAME = "Detail"
 
 
 @extend_schema_serializer(component_name=ERROR_COMPONENT_NAME)
@@ -39,25 +42,42 @@ class ErrorSerializer(serializers.Serializer):
     message = serializers.CharField(required=False)
 
 
+@extend_schema_serializer(component_name=DETAIL_COMPONENT_NAME)
+class DetailSerializer(serializers.Serializer):
+    """The handle a view uses to declare DRF's own failure body, `{"detail": ...}`.
+
+    Everything outside `/auth/*` fails in this shape, and DRF renders it from an exception, so the
+    generator reads nothing from the view and publishes a response with no body at all. It exists
+    for the same reason `ErrorSerializer` does — one component the failures point at — and is the
+    other half of the split the auth contract draws: the envelope above belongs to `/auth/*`, this
+    one to every endpoint that reads a session rather than opening it.
+    """
+
+    detail = serializers.CharField()
+
+
 def add_contract_components(result, generator, request, public):
-    """Add the session cookie scheme and the error envelope to the generated document.
+    """Add the session cookie's description and the error envelope to the generated document.
 
     Registered as a drf-spectacular postprocessing hook; the signature is the package's.
     """
     components = result.setdefault("components", {})
 
-    # OpenAPI 3 spells a cookie as an apiKey read from `in: cookie`. The name is read at generation
-    # time so it follows SESSION_COOKIE_NAME instead of restating it.
-    components.setdefault("securitySchemes", {})[COOKIE_SECURITY_SCHEME_NAME] = {
-        "type": "apiKey",
-        "in": "cookie",
-        "name": settings.SESSION_COOKIE_NAME,
-        "description": (
-            "Session cookie established by the `/auth/*` endpoints. It is `HttpOnly` and "
-            "`SameSite=Lax`: the browser attaches it on its own and no client code can read it, so "
-            "there is no token to send in a header."
-        ),
-    }
+    # `GET /users/me` authenticates with the cookie, so drf-spectacular's own `SessionScheme` emits
+    # this entry — type, and the name read from SESSION_COOKIE_NAME — before the hook runs. What is
+    # added here is the description only: overwriting the rest would publish a hardcoded copy the
+    # day the generator's version stops matching. The literal below is the fallback for a document
+    # generated with no endpoint that authenticates at all; OpenAPI 3 spells a cookie as an apiKey
+    # read from `in: cookie`.
+    cookie_scheme = components.setdefault("securitySchemes", {}).setdefault(
+        COOKIE_SECURITY_SCHEME_NAME,
+        {"type": "apiKey", "in": "cookie", "name": settings.SESSION_COOKIE_NAME},
+    )
+    cookie_scheme["description"] = (
+        "Session cookie established by the `/auth/*` endpoints. It is `HttpOnly` and "
+        "`SameSite=Lax`: the browser attaches it on its own and no client code can read it, so "
+        "there is no token to send in a header."
+    )
 
     components.setdefault("schemas", {})[ERROR_COMPONENT_NAME] = {
         "type": "object",

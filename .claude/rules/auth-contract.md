@@ -29,10 +29,31 @@ frontend owns the check, and this was confirmed with the frontend developer rath
 declares no `confirmPassword`, so one sent anyway is ignored rather than refused. Adding a server-side
 comparison is a contract change plus a coordinated frontend release, not a hardening tweak.
 
-**Sessions, not tokens.** `django.contrib.auth.login()` sets the `HttpOnly`, `SameSite=Lax` cookie; nothing
-auth-related goes in the response body. `SESSION_COOKIE_SECURE` is env-driven — hardcoding `True` breaks
-local HTTP, hardcoding `False` ships a cookie readable off the wire. `rememberMe` is
+**Sessions, not tokens.** `django.contrib.auth.login()` sets the `HttpOnly`, `SameSite=Lax` cookie, and it
+is the whole of what authenticates the next request. The success body carries the account
+(`{"user": {"id", "email", "fullName", "role"}}` — `SessionUserSerializer`) and never a token, a session key
+or anything else replayable. `SESSION_COOKIE_SECURE` is env-driven — hardcoding `True` breaks local HTTP,
+hardcoding `False` ships a cookie readable off the wire. `rememberMe` is
 `request.session.set_expiry(30 days | 0)`, not a field we store.
+
+**One account shape, three endpoints.** Login, registration and `GET /users/me` all render through
+`SessionUserSerializer`, so a client writes one parser and a field is added in one place. `UserSerializer`
+publishes an explicit four-field tuple against a row that also holds the password hash, the staff flags and
+the lockout counters — widening it is a contract change, and `fields = "__all__"` would make the next
+column one silently.
+
+**`GET /users/me` is not an `/auth/*` endpoint.** It reads the account behind a session instead of
+establishing one, so it keeps the project's defaults — `SessionAuthentication`, `IsAuthenticated`, DRF's
+`{"detail": ...}` on a failure — and the envelope exception above does not extend to it. Anonymous gets
+**403, not 401**: `SessionAuthentication` publishes no `WWW-Authenticate` header and DRF rewrites the status
+when it has none. Do not "fix" that with a custom exception; docs/auth-api.md documents the 403.
+
+**That section of the contract is the one this side wrote.** `GET /users/me` is in neither ACC story — the
+signed-in pages need it, which is HOME-01 — so its presence in docs/auth-api.md is not the reason it exists:
+it was agreed with the frontend developer, the same way `confirmPassword` was, and the document was edited
+to record the agreement. Read that order the right way round. Adding an endpoint to that file is a decision
+someone takes with the client, never one inferred from the file, and the account shape it publishes is now
+something the frontend parses — widening or renaming a field there is a coordinated release, not an edit.
 
 **Login and register carry no CSRF token** — the frontend sends none. They declare
 `authentication_classes = ()`, so DRF's `SessionAuthentication.enforce_csrf` never runs on them, and the

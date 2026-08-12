@@ -1,22 +1,28 @@
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.schema import ErrorSerializer
+from common.schema import DetailSerializer, ErrorSerializer
 from users.exceptions import InvalidRequest
-from users.serializers import ForgotPasswordSerializer, LoginSerializer, RegisterSerializer
+from users.serializers import (
+    ForgotPasswordSerializer,
+    LoginSerializer,
+    RegisterSerializer,
+    SessionUserSerializer,
+)
 from users.services import authenticate_member, register_member, request_password_reset
 
 
 def session_cookie_header(response_status, expiry):
     """The `Set-Cookie` a successful authentication answers with.
 
-    The cookie is the entire result of these endpoints and nothing in the response body implies it,
-    so it is declared rather than left for a reader to infer. Both endpoints set the same cookie
-    with the same flags — stated once here — and differ in the status that carries it (login answers
-    200, registration 201) and in how long it lives, which is what `expiry` says.
+    The cookie is what actually authenticates the next request — the account in the response body
+    is a convenience, not a credential — so it is declared rather than left for a reader to infer.
+    Both endpoints set the same cookie with the same flags — stated once here — and differ in the
+    status that carries it (login answers 200, registration 201) and in how long it lives, which is
+    what `expiry` says.
     """
     return OpenApiParameter(
         name="Set-Cookie",
@@ -40,8 +46,9 @@ def describe_errors(errors):
     tags=["auth"],
     summary="Log in",
     description=(
-        "Verifies the credentials and establishes the session cookie. The body of a success is "
-        "empty: the session is the result, and no token is ever returned."
+        "Verifies the credentials and establishes the session cookie, then answers with the "
+        "signed-in account. What authenticates the next request is the cookie: the body carries no "
+        "token, and nothing in it is a credential."
     ),
     request=LoginSerializer,
     # This endpoint establishes the session rather than requiring one.
@@ -54,7 +61,10 @@ def describe_errors(errors):
         ),
     ],
     responses={
-        status.HTTP_200_OK: OpenApiResponse(description="Signed in. The session cookie is set."),
+        status.HTTP_200_OK: OpenApiResponse(
+            response=SessionUserSerializer,
+            description="Signed in. The session cookie is set and the body carries the account.",
+        ),
         status.HTTP_400_BAD_REQUEST: OpenApiResponse(
             response=ErrorSerializer,
             description="`UNKNOWN_ERROR` — the request body is missing a field or malformed.",
@@ -96,9 +106,9 @@ class LoginView(APIView):
 
         # `request._request` — the service hands it to `login()`, whose `rotate_token()` flags the
         # request object it is given, and `CsrfViewMiddleware` only ever reads the original one.
-        authenticate_member(request._request, **serializer.validated_data)
+        user = authenticate_member(request._request, **serializer.validated_data)
 
-        return Response(status=status.HTTP_200_OK)
+        return Response(SessionUserSerializer({"user": user}).data, status=status.HTTP_200_OK)
 
 
 @extend_schema(
@@ -106,8 +116,8 @@ class LoginView(APIView):
     summary="Register",
     description=(
         "Creates a Member account and establishes the session cookie, so the new user is already "
-        "signed in (ACC-02 #6). The body of a success is empty. \"Confirm password\" is not part of "
-        "the request: the mismatch check is the client's."
+        "signed in (ACC-02 #6), and answers with that account in the same shape login uses. "
+        "\"Confirm password\" is not part of the request: the mismatch check is the client's."
     ),
     request=RegisterSerializer,
     auth=[],
@@ -119,7 +129,10 @@ class LoginView(APIView):
         ),
     ],
     responses={
-        status.HTTP_201_CREATED: OpenApiResponse(description="Account created. The session cookie is set."),
+        status.HTTP_201_CREATED: OpenApiResponse(
+            response=SessionUserSerializer,
+            description="Account created and signed in. The session cookie is set.",
+        ),
         status.HTTP_400_BAD_REQUEST: OpenApiResponse(
             response=ErrorSerializer,
             description=(
@@ -153,9 +166,9 @@ class RegisterView(APIView):
             raise InvalidRequest(describe_errors(serializer.errors))
 
         # `request._request` for `login()`'s `rotate_token()`, as on the login path.
-        register_member(request._request, **serializer.validated_data)
+        user = register_member(request._request, **serializer.validated_data)
 
-        return Response(status=status.HTTP_201_CREATED)
+        return Response(SessionUserSerializer({"user": user}).data, status=status.HTTP_201_CREATED)
 
 
 @extend_schema(
@@ -190,3 +203,47 @@ class ForgotPasswordView(APIView):
         request_password_reset(**serializer.validated_data)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(
+    tags=["users"],
+    summary="The signed-in account",
+    description=(
+        "Reads the account behind the session cookie, in the same shape login and registration "
+        "answer with. It is how a client that reloads the page — or one that was signed in on an "
+        "earlier visit — finds out who it is, since the cookie is `HttpOnly` and nothing in the "
+        "browser can read it.\n\n"
+        "It is not an `/auth/*` endpoint: it establishes no session and answers a failure in the "
+        "project's own DRF shape (`{\"detail\": ...}`), not the contract's `{\"code\", \"message\"}` "
+        "envelope."
+    ),
+    responses={
+        status.HTTP_200_OK: OpenApiResponse(
+            response=SessionUserSerializer,
+            description="The account the session cookie belongs to.",
+        ),
+        status.HTTP_403_FORBIDDEN: OpenApiResponse(
+            response=DetailSerializer,
+            description=(
+                "No usable session cookie. 403 rather than 401 because `SessionAuthentication` "
+                "publishes no `WWW-Authenticate` header, and DRF rewrites the status when it "
+                "cannot: there is no header to send, so there is nothing for a client to retry "
+                "with. Treat it as \"not signed in\"."
+            ),
+        ),
+    },
+)
+class CurrentUserView(APIView):
+    """`GET /users/me` — the account behind the session cookie.
+
+    The first endpoint in this project to keep the defaults rather than opt out of them:
+    `SessionAuthentication` and `IsAuthenticated`, which is what everything reachable after login
+    gets. CSRF comes with the authenticator and costs this endpoint nothing — Django's middleware
+    exempts the safe methods, so a GET needs no token — but a write added here later would need one,
+    and the frontend has the CSRF cookie by then: `login()` rotates it on the way in.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, *args, **kwargs):
+        return Response(SessionUserSerializer({"user": request.user}).data)

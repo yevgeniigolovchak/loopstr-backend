@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 from rest_framework import serializers
 
+from users.models import User
+
 # What reaches the hasher. Without a cap the bound is `DATA_UPLOAD_MAX_MEMORY_SIZE` — 2.5 MB, all of
 # it hashed on a login path that hashes for unknown addresses too and counts nothing for them.
 #
@@ -82,3 +84,33 @@ class ForgotPasswordSerializer(serializers.Serializer):
     """Request body of `POST /auth/forgot-password` — docs/auth-api.md."""
 
     email = serializers.EmailField()
+
+
+class UserSerializer(serializers.ModelSerializer):
+    """The account, as every endpoint that answers with one publishes it.
+
+    `fields` is an explicit tuple and every one of them is read-only: the row also carries the
+    password hash, the staff and superuser flags and the lockout counters, and a column added later
+    joins no payload on its own. `fullName` keeps the camelCase the registration body already uses —
+    the client reads and writes the same name for the same thing — and `source=` is what stops the
+    convention from reaching anything but this boundary.
+    """
+
+    fullName = serializers.CharField(source="full_name", read_only=True)
+
+    class Meta:
+        model = User
+        fields = ("id", "email", "fullName", "role")
+        read_only_fields = ("id", "email", "role")
+
+
+class SessionUserSerializer(serializers.Serializer):
+    """`{"user": {...}}` — the body of every response that answers with the signed-in account.
+
+    Login, registration and `GET /users/me` all render through this one, so a client writes a single
+    parser and a field added to the account shows up in all three at once. The envelope is what makes
+    room for a second key later — the session's expiry, a set of feature flags — without the payload
+    it publishes today changing shape.
+    """
+
+    user = UserSerializer(read_only=True)

@@ -1,6 +1,13 @@
 import pytest
 
-from users.serializers import ForgotPasswordSerializer, LoginSerializer, RegisterSerializer
+from users.models import User
+from users.serializers import (
+    ForgotPasswordSerializer,
+    LoginSerializer,
+    RegisterSerializer,
+    SessionUserSerializer,
+    UserSerializer,
+)
 
 VALID_PAYLOAD = {"email": "member@example.com", "password": "SecretPassword1", "rememberMe": True}
 VALID_REGISTRATION = {
@@ -189,6 +196,44 @@ class TestRegisterSerializer:
 
         assert not serializer.is_valid()
         assert len(serializer.errors["password"]) == 2
+
+
+class TestUserSerializer:
+    """The account as login, registration and `GET /users/me` all publish it.
+
+    Built from an unsaved row on purpose: what these assert is the shape of the payload, and nothing
+    about it needs a database.
+    """
+
+    def test_it_publishes_the_account_in_camel_case(self):
+        user = User(id=7, email="maya@example.com", full_name="Maya Lindqvist")
+
+        assert UserSerializer(user).data == {
+            "id": 7,
+            "email": "maya@example.com",
+            "fullName": "Maya Lindqvist",
+            "role": User.ROLES.member,
+        }
+
+    def test_it_publishes_nothing_the_fields_tuple_does_not_name(self):
+        # The row carries the password hash, the staff and superuser flags and the lockout counters.
+        # An explicit tuple is what keeps the next column added to the model out of the payload.
+        user = User(id=7, email="maya@example.com", full_name="Maya Lindqvist", is_staff=True)
+        user.set_password("SecretPassword1")
+
+        assert set(UserSerializer(user).data) == {"id", "email", "fullName", "role"}
+
+    def test_every_field_is_read_only(self):
+        # Nothing writes an account through this serializer; a writable field here would be an
+        # endpoint's worth of behaviour nobody asked for.
+        assert all(field.read_only for field in UserSerializer().fields.values())
+
+
+class TestSessionUserSerializer:
+    def test_it_wraps_the_account_under_user(self):
+        user = User(id=7, email="maya@example.com", full_name="Maya Lindqvist")
+
+        assert SessionUserSerializer({"user": user}).data == {"user": UserSerializer(user).data}
 
 
 class TestForgotPasswordSerializer:
